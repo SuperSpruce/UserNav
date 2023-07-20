@@ -1,0 +1,417 @@
+#include <Kalman.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_NeoMatrix.h>
+#include <Adafruit_NeoPixel.h>
+#include <BasicLinearAlgebra.h>
+
+Adafruit_NeoMatrix matrix = Adafruit_NeoMatrix(32, 8, 11, 1, 25, NEO_MATRIX_BOTTOM + NEO_MATRIX_LEFT + NEO_MATRIX_COLUMNS + NEO_MATRIX_PROGRESSIVE + NEO_TILE_TOP + NEO_TILE_LEFT + NEO_TILE_ROWS + NEO_TILE_PROGRESSIVE, NEO_GRB + NEO_KHZ800);
+
+//Potentiometer stuff
+int ppin0 = A0;  //hue
+int ppin1 = A1;  //red amount
+int ppin2 = A2;  //green amount
+int ppin3 = A3;  //blue amount
+int ppin4 = A4;  //speed
+int dpin1 = 8;   //destination straight
+int dpin2 = 9;   //destination turn
+int hue, spd = 0;
+uint16_t color;
+//Pins for sensors
+const int trigPin1 = 2;
+const int echoPin1 = 3;
+const int trigPin2 = 4;
+const int echoPin2 = 5;
+float q = 0.01;  
+float alpha = 1; // Filter coefficient
+float filtered_distance1 = 0;
+float filtered_distance2 = 0;  
+
+
+// Define variables for storing distance values
+double distance1, distance2;
+int x01, x02, y01, y02, x11, x12, y11, y12, xp, yp, xd, yd;
+int destination;
+int direct;
+int success;
+
+
+//function prototypes
+void drawPixel(uint16_t x, uint16_t y, uint16_t color);
+void drawArrow(uint16_t x, uint16_t color, int dir);
+void drawCheck(uint16_t x, uint16_t color, int dir);
+uint16_t getColor(int hue);
+double distanceToLines(int x, int y);
+void determinePoint(int x1, int y1, int x2, int y2);
+void determinePointBasedOnDestination(int x1, int y1, int x2, int y2);
+void display_freeram();
+int freeRam();
+
+void display_freeram() {
+  Serial.print(F("- SRAM left: "));
+  Serial.println(freeRam());
+}
+
+
+
+uint16_t getColor(int hue)
+{
+  uint8_t redVal, grnVal, bluVal;
+  if (hue < 342)  // Lowest third of the potentiometer's range (0-341)
+  {                  
+    hue = (hue * 3) / 4; // Normalize to 0-255
+    redVal = 255 - hue;  // Red from full to off
+    grnVal = hue;        // Green from off to full
+    bluVal = 0;             // Blue off
+  }
+  else if (hue < 683) // Middle third of potentiometer's range (342-682)
+  {
+    hue = ( (hue-341) * 3) / 4; // Normalize to 0-255
+    redVal = 0;            // Red off
+    grnVal = 255 - hue; // Green from full to off
+    bluVal = hue;       // Blue from off to full
+  }
+  else  // Upper third of potentiometer"s range (683-1023)
+  {
+    hue = ( (hue-683) * 3) / 4; // Normalize to 0-255
+    redVal = hue;       // Red from off to full
+    grnVal = 0;            // Green off
+    bluVal = 255 - hue; // Blue from full to off
+  }
+  uint16_t Rgb565 = (redVal & 0b11111000) <<8;
+  Rgb565 = Rgb565 + ((grnVal & 0b11111100 ) <<3);
+  Rgb565 = Rgb565 + ((bluVal) >> 3);
+  return Rgb565;
+}
+
+
+void drawPixel(uint16_t x, uint16_t y, uint16_t color)
+{
+   matrix.drawPixel(x, y, color);
+}
+
+
+void drawArrow(uint16_t x, uint16_t color, int dir)
+  {
+    if(dir == 0) //Up
+    {
+      if(x > 283 && x < 288) x = 283;
+      if(x > 287 && x < 291) x = 291;
+     for(int i = 0; i < 8; i++)
+      {
+        drawPixel(x, i, color);
+        drawPixel(x+1, i, color);
+      }
+      drawPixel(x-1, 1, color);
+      drawPixel(x+2, 6, color);
+      drawPixel(x-2, 5, color);
+      drawPixel(x+3, 2, color);
+      drawPixel(x-3, 3, color);
+      drawPixel(x+4, 4, color);
+    }
+    else if(dir == 1) //Right, forwards
+    {
+      if(x > 287 && x < 295) x = 295;
+      for(int i = 0; i < 8; i++)
+      {
+        drawPixel(x-i, 3, color);
+        drawPixel(x-i, 4, color);
+      }
+      drawPixel(x-1, 2, color);
+      drawPixel(x-1, 5, color);
+      drawPixel(x-2, 1, color);
+      drawPixel(x-2, 6, color);
+      drawPixel(x-3, 0, color);
+      drawPixel(x-3, 7, color);
+    }
+    else if(dir == 2) //Down
+    {
+      if(x > 283 && x < 288) x = 283;
+      if(x > 287 && x < 291) x = 291;
+      for(int i = 0; i < 8; i++)
+      {
+        drawPixel(x, i, color);
+        drawPixel(x+1, i, color);
+      }
+      drawPixel(x-1, 6, color);
+      drawPixel(x+2, 1, color);
+      drawPixel(x-2, 2, color);
+      drawPixel(x+3, 5, color);
+      drawPixel(x-3, 4, color);
+      drawPixel(x+4, 3, color);
+    }
+    else if(dir == 3) //Left, backwards
+    {
+      if(x > 280 && x < 288) x = 280;
+      for(int i = 0; i < 8; i++)
+      {
+        drawPixel(x+i, 3, color);
+        drawPixel(x+i, 4, color);
+      }
+      drawPixel(x+1, 2, color);
+      drawPixel(x+1, 5, color);
+      drawPixel(x+2, 1, color);
+      drawPixel(x+2, 6, color);
+      drawPixel(x+3, 0, color);
+      drawPixel(x+3, 7, color);
+    }
+  }
+
+
+void drawCheck(uint16_t x, uint16_t color, int dir)
+{
+  int n;
+  if(dir == 0) {
+    n = 1;
+  }
+  else if(dir == 1) {
+    n = -1;
+  }
+
+  drawPixel(x, 7, color);
+  drawPixel(x+n*1, 0, color);
+  drawPixel(x+n*1, 1, color);
+  drawPixel(x+n*2, 6, color);
+  drawPixel(x+n*2, 5, color);
+  drawPixel(x+n*3, 2, color);
+  drawPixel(x+n*3, 3, color);
+  drawPixel(x+n*4, 4, color);
+  drawPixel(x+n*4, 3, color);
+  drawPixel(x+n*5, 4, color);
+  drawPixel(x+n*5, 5, color);
+  drawPixel(x+n*6, 2, color);
+  drawPixel(x+n*5, 6, color);
+  drawPixel(x+n*4, 1, color);
+  drawPixel(x+n*4, 0, color);
+  drawPixel(x+n*3, 7, color);
+}
+
+
+
+
+double DistanceToLines(int x, int y)
+{
+    double xbound = max(max(0,x), -64-x);
+    double ybound = max(max(0,-1*y), y-256);
+    return sqrt(min(x*x + ybound*ybound, xbound*xbound + (y-33)*(y-33)));
+}
+
+
+void determinePoint(int x1, int y1, int x2, int y2)
+{
+  if(DistanceToLines(x1, y1) <= DistanceToLines(x2, y2))
+  {
+    double xbound = max(max(0,x1), -64-x1);
+    double ybound = max(max(0,-1*y1), y1-256);
+    double d1 = sqrt(x1*x1 + ybound*ybound);
+    double d2 = sqrt(xbound*xbound + (y1-33)*(y1-33));
+    if(d1 <= d2) {
+      xd = 0;
+      yd = max(0, min(y1, 255));
+    }
+    else {
+      xd = max(-63, min(x1, -1));
+      yd = 33;
+    }
+  }
+  else
+  {
+    double xbound = max(max(0,x2), -64-x2);
+    double ybound = max(max(0,-1*y2), y2-256);
+    double d1 = sqrt(x2*x2 + ybound*ybound);
+    double d2 = sqrt(xbound*xbound + (y2-33)*(y2-33));
+    if(d1 <= d2) {
+      xd = 0;
+      yd = max(0, min(y2, 255));
+    }
+    else {
+      xd = max(-63, min(x2, -1));
+      yd = 33;
+    }
+  }
+}
+
+
+void determinePointBasedOnDestination(int x1, int y1, int x2, int y2)
+{
+  double d1, d2;
+  if(DistanceToLines(x1, y1) <= DistanceToLines(x2, y2))
+  {
+    xp = x1;
+    yp = y1;
+  }
+  else
+  {
+    xp = x2;
+    yp = y2;
+  }
+  double xbound = max(max(0,xp), -64-xp);
+  double ybound = max(max(0,-1*yp), yp-256);
+  d1 = sqrt(xp*xp + ybound*ybound);
+  d2 = sqrt(xbound*xbound + (yp-33)*(yp-33));
+  if(destination == 1) {
+      xd = 0;
+      yd = max(0, min((int)(yp/1.4-80), 287));
+      direct = 3;
+    }
+    else if(destination == 2) {
+      if(d1 <= d2) {
+        xd = 0;
+        yd = max(0, min((int)(yp/1.4-80), 287));
+        if(yd > 72) {
+          direct = 3;
+        }
+        else {
+          if(yd < 33) {
+            yd = 33;
+          }
+          direct = 2*(yd % 2);
+        }
+      }
+      else {
+        xd = max(-63, min(xp-32, -1));
+        yd = 33;
+        direct = 3;
+      }
+    }
+}
+
+
+
+
+
+void setup() {
+  // put your setup code here, to run once:  
+  pinMode(trigPin1, OUTPUT);
+  pinMode(trigPin2, OUTPUT);
+  pinMode(echoPin1, INPUT);
+  pinMode(echoPin2, INPUT);
+  pinMode(dpin1, INPUT_PULLUP);
+  pinMode(dpin2, INPUT_PULLUP);
+  pinMode(7, OUTPUT);
+  // Initialize serial communication at 9600 baud
+  Serial.begin(9600);
+
+  matrix.begin();
+  matrix.clear();
+  matrix.setBrightness(75);
+
+  //drawArrow(10, 0x0912, 0);
+  destination = 0;
+  success = 0;
+  matrix.show();
+}
+
+void loop() {
+  if(pulseIn(dpin1, HIGH) > 0.2) {
+      destination = 1;
+      success = 0;
+    }
+    if(pulseIn(dpin2, HIGH) > 0.2) {
+      destination = 2;
+      success = 0;
+    }
+    Serial.print(xp);
+  Serial.print("\t");
+  Serial.print(yp);
+  Serial.print("\t");
+  Serial.println(destination);
+  while(destination != 0) {
+       {
+        digitalWrite(trigPin1, LOW);
+        delayMicroseconds(2);
+        digitalWrite(trigPin1, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(trigPin1, LOW);
+      
+        // Measure the time it takes for the pulse to bounce back
+        distance1 = pulseIn(echoPin1, HIGH) / 58.0;
+      
+        // Send a pulse to the second sensor
+        digitalWrite(trigPin2, LOW);
+        delayMicroseconds(2);
+        digitalWrite(trigPin2, HIGH);
+        delayMicroseconds(10);
+        digitalWrite(trigPin2, LOW);
+      
+        // Measure the time it takes for the pulse to bounce back
+        distance2 = pulseIn(echoPin2, HIGH) / 58.0;
+      
+        filtered_distance1 = alpha * distance1 + (1 - alpha) * filtered_distance1;
+        filtered_distance2 = alpha * distance2 + (1 - alpha) * filtered_distance2;
+      
+        // Print the distances to the serial monitor
+        Serial.print("Distance 1: ");
+        Serial.print(distance1);
+        Serial.print(" cm");
+      
+        Serial.print("\tDistance 2: ");
+        Serial.print(distance2);
+        Serial.print(" cm\n");
+      
+        //Calculate the possible values
+        if(distance2 > 120) {
+          y11 = filtered_distance1 + 10;
+          y12 = filtered_distance1 + 10;
+        }
+        else {
+          x01 = (-552238 - 77*filtered_distance1*filtered_distance1 + 77*filtered_distance2*filtered_distance2 + 43*sqrt(-1*pow(filtered_distance1, 4) + 2*filtered_distance1*filtered_distance1*(filtered_distance2*filtered_distance2 + 7778) - pow(filtered_distance2*filtered_distance2 - 7778, 2))) / 15556;
+          x02 = (-552238 - 77*filtered_distance1*filtered_distance1 + 77*filtered_distance2*filtered_distance2 - 43*sqrt(-1*pow(filtered_distance1, 4) + 2*filtered_distance1*filtered_distance1*(filtered_distance2*filtered_distance2 + 7778) - pow(filtered_distance2*filtered_distance2 - 7778, 2))) / 15556;
+          y01 = (178894 + 43*filtered_distance1*filtered_distance1 - 43*filtered_distance2*filtered_distance2 + 77*sqrt(-1*pow(filtered_distance1, 4) + 2*filtered_distance1*filtered_distance1*(filtered_distance2*filtered_distance2 + 7778) - pow(filtered_distance2*filtered_distance2 - 7778, 2))) / 15556;
+          y02 = (178894 + 43*filtered_distance1*filtered_distance1 - 43*filtered_distance2*filtered_distance2 - 77*sqrt(-1*pow(filtered_distance1, 4) + 2*filtered_distance1*filtered_distance1*(filtered_distance2*filtered_distance2 + 7778) - pow(filtered_distance2*filtered_distance2 - 7778, 2))) / 15556;
+          if(x01 != 0 || y01 != 0) {
+            x11 = x01;
+           y11 = y01;
+          }
+          if(x02 != 0 || y02 != 0) {
+            x12 = x02;
+            y12 = y02;
+          }
+        }
+      
+        //Determine destination
+        if(success > 5) {
+          destination = 0;
+        }
+      
+        //Decide where to display arrow
+        determinePointBasedOnDestination(x11, y11, x12, y12);
+      
+      
+        //Calculate vector
+      
+        //Display arrow or check
+          if(yp < 32 && destination == 1) {
+            drawCheck(0, 0b0000011111100000, 0);
+            success++;
+          }
+          else if(yp < 46 && yp > 20 && destination == 2) {
+            drawCheck(288, 0b0000011111100000, 0);
+            success++;
+          }
+          else if(xd == 0 && destination != 0) {
+            drawArrow((uint16_t)yd, 0xFFFF, direct);
+            success = 0;
+          }
+          else if(destination != 0) {
+            drawArrow((uint16_t)(352+xd), 0xFFFF, direct);
+            success = 0;
+          }
+        if (destination==2 && yp <= 120 && yp >= 60) {
+          digitalWrite(7, LOW);
+        } else {
+          digitalWrite(7, HIGH);
+        }
+      
+        matrix.show();
+        matrix.clear();
+        }
+      
+        Serial.print(xp);
+        Serial.print("\t");
+        Serial.print(yp);
+        Serial.print("\t");
+        Serial.println(destination);
+        }
+        
+
+}
